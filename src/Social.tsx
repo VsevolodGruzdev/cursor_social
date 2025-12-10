@@ -1,4 +1,30 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+
+// Минимальные типы под Telegram WebApp API (без зависимости от @types)
+type TgUser = {
+  id: number;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  language_code?: string;
+};
+
+type TgWebApp = {
+  initData?: string;
+  initDataUnsafe?: {
+    user?: TgUser;
+  };
+  ready: () => void;
+  expand: () => void;
+};
+
+declare global {
+  interface Window {
+    Telegram?: {
+      WebApp: TgWebApp;
+    };
+  }
+}
 
 // Локальное описание товара, чтобы не тянуть тип из App
 export interface Product {
@@ -113,7 +139,46 @@ const categoryMap: { [key: string]: string } = {
   Спорт: 'sport',
 };
 
+const useTelegramWebApp = () => {
+  const [webApp, setWebApp] = useState<TgWebApp | null>(null);
+  const [initData, setInitData] = useState<string>('');
+  const [user, setUser] = useState<TgUser | null>(null);
+
+  useEffect(() => {
+    const tg = window.Telegram?.WebApp;
+    if (!tg) return;
+
+    tg.ready();
+    tg.expand();
+
+    setWebApp(tg);
+    setInitData(tg.initData || '');
+    setUser(tg.initDataUnsafe?.user || null);
+  }, []);
+
+  // Одноразовая отправка initData на сервер (заглушка). Ошибки не ломают UI.
+  useEffect(() => {
+    if (!initData) return;
+
+    const controller = new AbortController();
+    fetch('/api/telegram/init', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Telegram-Init-Data': initData,
+      },
+      body: JSON.stringify({ user }),
+      signal: controller.signal,
+    }).catch(() => null);
+
+    return () => controller.abort();
+  }, [initData, user]);
+
+  return { webApp, initData, user };
+};
+
 function FeedScreen({ onOpenComments }: FeedScreenProps) {
+  const { user } = useTelegramWebApp();
   const [products, setProducts] = useState<Product[]>(mockProducts);
   const [showAddPurchase, setShowAddPurchase] = useState(false);
   const [showWelcome, setShowWelcome] = useState(true);
@@ -167,6 +232,14 @@ function FeedScreen({ onOpenComments }: FeedScreenProps) {
               <h1 className="text-xl font-semibold text-[#0f172a]">Покупки друзей</h1>
             </div>
             <div className="flex gap-2">
+              {user && (
+                <div className="hidden sm:flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium border border-gray-200 bg-white text-[#0f172a]">
+                  <span className="text-lg">👤</span>
+                  <span>
+                    {user.first_name} {user.last_name || ''}
+                  </span>
+                </div>
+              )}
               <button
                 onClick={() => setShowAddPurchase(true)}
                 className="px-3 py-2 rounded-xl text-sm font-medium text-white bg-gradient-to-r from-[#0088cc] to-[#4bb6f7] shadow hover:shadow-md transition"
@@ -237,7 +310,7 @@ function FeedScreen({ onOpenComments }: FeedScreenProps) {
       )}
 
       {/* Products Feed */}
-      <div className="space-y-3 px-4 mt-4">
+    <div className="space-y-3 px-4 mt-4 pb-3">
         {filteredProducts.length > 0 ? (
           filteredProducts.map((product) => (
             <ProductCard
